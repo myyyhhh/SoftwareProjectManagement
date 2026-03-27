@@ -1,4 +1,4 @@
-# document_parser.py 里的接口定义
+# document_parser.py
 
 def extract_text_from_file(uploaded_file) -> str:
     """

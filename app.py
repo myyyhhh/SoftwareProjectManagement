@@ -1,4 +1,4 @@
-# app.py (Streamlit 主程序)
+# app.py
 import streamlit as st
 
 # 导入接口
