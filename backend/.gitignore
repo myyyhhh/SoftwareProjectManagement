@@ -1,1 +1,18 @@
-temp_uploads/*
+# 1. 核心：忽略环境配置文件（密码、密钥都在这里）
+.env
+.env.*
+!.env.example
+
+# 2. 忽略 Python 编译文件（你之前的 .pyc / __pycache__）
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 3. 忽略你的临时上传文件夹（防止上传测试文件）
+temp/
+tmp/
+
+# 4. 忽略 IDE/系统缓存文件
+.idea/
+.vscode/
+.DS_Store
