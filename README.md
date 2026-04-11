@@ -1,15 +1,30 @@
 # SoftwareProjectManagement
-软件项目管理，分组12
+软件项目管理，分组12，
 
 ```
-software_project_management/ 
-├── app.py             # 主程序 (Streamlit界面与逻辑调度)
-├── document_parser.py # 文档解析模块 (读取PDF/Word转纯文本)
-├── prompt_template.py # 提示词模块 (存储模板与品牌设定)
-├── llm_api.py         # 大模型API调用模块 
-├── .env               # 存放API_KEY
-├── assets/            # 存放测试用的PDF说明书、UI图标等
-└── requirements.txt   # 项目依赖库
+backend/
+├── main.py # 项目入口，启动文件
+├── api/ # API 路由层
+│ ├── __init__.py
+│ ├── upload.py # 上传接口（文件/文本）
+│ └── generate.py # AI 内容生成接口
+│
+├── service/ # 业务逻辑层（核心）
+│ ├── __init__.py
+│ ├── parser_service.py # PDF/DOCX/TXT 解析服务
+│ └── ai_service.py # AI 调用、LangGraph 服务
+│
+├── utils/ # 工具类
+│ ├── __init__.py
+│ └── text_cleaner.py # 文本清洗工具
+│
+├── models/ # 数据模型
+│ ├── __init__.py
+│ └── schemas.py # Pydantic 结构体
+│
+├── config.py # 配置（模型key、路径等）
+├── requirements.txt
+└── .gitignore 
 
 ```
 
