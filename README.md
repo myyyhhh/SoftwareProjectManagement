@@ -18,6 +18,15 @@ backend/
 │ ├── __init__.py
 │ └── text_cleaner.py # 文本清洗工具
 │
+├── prompts/ # 提示词与skills
+│ ├── __init__.py
+│ ├── prompts.
+│ └── skills/
+│   ├── a.md
+│   ├── b.md
+│   ├── c.md
+│   └── d.md
+│
 ├── models/ # 数据模型
 │ ├── __init__.py
 │ └── schemas.py # Pydantic 结构体
