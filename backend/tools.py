@@ -9,9 +9,9 @@ def load_skill(skill_name: str) -> str:
     """
     加载专业的技能提示词和品牌规范。
     可用的 skill_name 必须是以下之一:
-    - brand: 品牌调性规范与禁用词检查清单
     - blog: 博客文章的排版和写作要求
-    - video: 视频脚本的分镜格式要求
+    - case_study: 案例研究的结构和写作要求
+    - video: 视频脚本的结构和分镜格式要求
     """
     # 假设你的根目录下有一个 skills 文件夹
     file_path = os.path.join("skills", f"{skill_name}.md")

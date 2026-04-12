@@ -15,6 +15,7 @@ load_dotenv()
 # 定义全局状态 (State)
 class AgentState(TypedDict):
     product_doc: str  # 产品文档
+    product_spec: str # 动态提取的产品规范
     content_type: str # 内容类型
     messages: Annotated[list, add_messages] # 自动累加对话历史
     is_approved: bool # 是否彻底完工
@@ -37,16 +38,38 @@ tool_node = ToolNode([load_skill])
 
 # --- 节点函数 ---
 
+def analyzer_node(state: AgentState):
+    """分析节点：负责从原始文档中提取产品核心信息和规范"""
+    if state.get("product_spec"):
+        return {}
+
+    analyze_prompt = f"""
+    你是一个精锐的产品提炼师。请从下方的产品文档中，提取出：
+    1. 核心的 3 个产品卖点
+    2. 产品的目标受众（受众是谁）
+    3. 建议的沟通语气（例如：专业严谨、幽默活泼、极客风等）
+    
+    要求：必须高度浓缩，总计不超过 150 字！
+    
+    原始文档：
+    {state['product_doc']}
+    """
+    response = llm.invoke([HumanMessage(content=analyze_prompt)])
+    
+    return {"product_spec": response.content}
+
+
 def generator_node(state: AgentState):
     """Maker 节点：负责起草和修改"""
     messages = state["messages"]
     # 如果是第一次运行，注入系统提示词和用户文档
     if not messages:
         sys_msg = SystemMessage(
-            content=f"你是一个专业的品牌内容创作者。当前任务是撰写 {state['content_type']}。"
-                    f"务必先调用 load_skill 工具，获取 'brand' 规范以及 '{state['content_type']}' 格式规范再开始写作。"
+            content=f"你是一个专业的品牌内容创作者。当前任务是撰写 {state['content_type']}。\n"
+                    f"【本产品的专属规范】：\n{state.get('product_spec', '')}\n"
+                    f"务必先调用 load_skill 工具，获取 '{state['content_type']}' 格式规范再开始写作。"
         )
-        user_msg = HumanMessage(content=f"产品说明参考：\n{state['product_doc']}")
+        user_msg = HumanMessage(content=f"请基于以下完整产品文档补充细节：\n{state['product_doc']}")
         messages = [sys_msg, user_msg]
 
     response = generator_llm.invoke(messages)
@@ -117,11 +140,15 @@ def route_review(state: AgentState):
 # --- 编译图结构 ---
 workflow = StateGraph(AgentState)
 
+workflow.add_node("analyzer", analyzer_node)
 workflow.add_node("generator", generator_node)
 workflow.add_node("tools", tool_node)
 workflow.add_node("reviewer", reviewer_node)
 
-workflow.set_entry_point("generator")
+workflow.set_entry_point("analyzer")
+
+# 分析完之后去起草
+workflow.add_edge("analyzer", "generator")
 
 # 生成器完成后，根据路由决定去执行工具还是送审
 workflow.add_conditional_edges("generator", should_continue, {"tools": "tools", "reviewer": "reviewer"})

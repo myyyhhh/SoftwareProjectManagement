@@ -13,6 +13,7 @@ def run_content_generation_agent(product_doc_text: str, content_type: str) -> di
     # 构造初始状态
     initial_state = {
         "product_doc": product_doc_text,
+        "product_spec": "",
         "content_type": content_type,
         "messages": [],
         "is_approved": False,
