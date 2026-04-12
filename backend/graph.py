@@ -14,15 +14,15 @@ load_dotenv()
 
 # 定义全局状态 (State)
 class AgentState(TypedDict):
-    product_doc: str
-    content_type: str
+    product_doc: str  # 产品文档
+    content_type: str # 内容类型
     messages: Annotated[list, add_messages] # 自动累加对话历史
-    is_approved: bool
-    final_data: dict
+    is_approved: bool # 是否彻底完工
+    final_data: dict  # 是否彻底完工
 
 # 初始化大模型
 llm = ChatMoonshot(
-    model="moonshot-v1-32k",  # 根据你的产品说明书长度选择 8k, 32k 或 128k
+    model="moonshot-v1-128k",  # 根据你的产品说明书长度选择 8k, 32k 或 128k
     temperature=0.7,
 )
 
