@@ -1,36 +1,50 @@
-# backend/main.py
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from schemas import GenerationRequest
+from graph import app as agent_workflow
+from utils import extract_text_from_file
 import uvicorn
 
-# 导入路由
-from api.upload import router as upload_router
+app = FastAPI(title="Brand-Consistent Content Agent API")
 
-# 初始化 FastAPI 应用
-app = FastAPI(
-    title="内容智能体 API",
-    description="软件项目管理 - 第12组 - 后端接口",
-    version="1.0.0"
-)
+@app.post("/generate_from_file")
+async def generate_content_from_file(
+    content_type: str = Form(..., description="要生成的内容类型 (例如: blog, video)"),
+    file: UploadFile = File(..., description="上传的PDF或Word文档")
+):
+    try:
+        # 1. 验证文件后缀
+        if not (file.filename.endswith(".pdf") or file.filename.endswith(".docx")):
+            raise HTTPException(status_code=400, detail="只允许上传 .pdf 或 .docx 文件")
 
-# 配置 CORS 跨域请求 (为了让前端 React 可以成功访问后端)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # 实际部署时建议改成前端实际的 URL，如 ["http://localhost:3000"]
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+        # 2. 读取文件并提取文本
+        file_bytes = await file.read()
+        product_doc_text = extract_text_from_file(file_bytes, file.filename)
+        
+        if not product_doc_text:
+            raise HTTPException(status_code=400, detail="无法从文件中提取到有效文本")
 
-# 注册 API 路由
-app.include_router(upload_router, prefix="/api/v1/files", tags=["文件处理"])
+        # 3. 构造初始状态 (使用提取出的文档文本)
+        initial_state = {
+            "product_doc": product_doc_text,
+            "content_type": content_type,
+            "messages": [],
+            "is_approved": False,
+            "final_data": {}
+        }
 
-# 根目录健康检查接口
-@app.get("/")
-def read_root():
-    return {"message": "Welcome to Group 12 Content Agent API!"}
+        # 4. 触发 LangGraph 分析
+        result = agent_workflow.invoke(initial_state, {"recursion_limit": 10})
 
-# 本地启动代码
+        return {
+            "status": "success",
+            "content_type": content_type,
+            "filename": file.filename,
+            "data": result["final_data"]
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()  # 打印完整报错堆栈到控制台
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
-    print("🚀 正在启动项目，访问 http://127.0.0.1:8000/docs 查看接口文档...")
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
