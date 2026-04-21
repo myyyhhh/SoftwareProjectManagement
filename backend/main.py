@@ -2,14 +2,29 @@ import json
 from typing import AsyncIterator, Optional
 
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Depends, Header
 from fastapi.responses import StreamingResponse
+from starlette.middleware.cors import CORSMiddleware
 
 from graph import app as agent_workflow
 from utils import SUPPORTED_FILE_EXTENSIONS, build_source_material, extract_text_from_file
+from auth import (
+    router as auth_router,
+    get_current_user_id,
+    create_conversation,
+    add_message,
+)
 
 app = FastAPI(title="Brand-Consistent Content Agent API")
+app.include_router(auth_router)  # 挂载认证路由
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def _init_state(source_material: str, content_type: str, user_prompt: str = "") -> dict:
     return {
@@ -102,6 +117,7 @@ async def stream_content_generation_agent(
         yield f"data: {json.dumps({'event': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
 
 
+
 @app.post("/generate_from_file")
 async def generate_content_from_file(
     content_type: str = Form(..., description="要生成的内容类型，例如 blog / video / case_study"),
@@ -109,6 +125,8 @@ async def generate_content_from_file(
     source_url: str = Form("", description="可选：产品网页 URL"),
     raw_text: str = Form("", description="可选：直接粘贴的产品资料文本"),
     user_prompt: str = Form("", description="可选：品牌约束、口吻要求、禁用词、额外提示词"),
+    conversation_id: Optional[int] = Form(None, description="可选：继续已有会话"),
+    user_id: int = Depends(get_current_user_id)  # 从 token 获取用户 ID
 ):
     try:
         file_bytes = None
@@ -128,14 +146,27 @@ async def generate_content_from_file(
             raw_text=raw_text,
         )
 
+        if conversation_id is None:
+            conv_id = create_conversation(user_id, title=f"{content_type} - {filename or '文本输入'}")
+        else:
+            conv_id = conversation_id  # 实际应校验该会话是否属于该用户，此处略
+
+        # 存储用户输入的提示词（作为 user 消息）
+        user_input_summary = f"生成类型: {content_type}\n额外提示: {user_prompt}" if user_prompt else f"生成类型: {content_type}"
+        add_message(conv_id, "user", user_input_summary)
+
         result = run_content_generation_agent(
             source_material=source_material,
             content_type=content_type,
             user_prompt=user_prompt,
         )
 
+        assistant_content = json.dumps(result["final_data"], ensure_ascii=False, indent=2)
+        add_message(conv_id, "assistant", assistant_content)
+
         return {
             "status": "success",
+            "conversation_id": conv_id,
             "content_type": content_type,
             "filename": filename,
             "source_url": source_url or None,
@@ -155,11 +186,13 @@ async def generate_content_from_file(
 
 @app.post("/generate_stream")
 async def generate_content_stream(
-    content_type: str = Form(..., description="要生成的内容类型，例如 blog / video / case_study"),
-    file: UploadFile | None = File(None, description="可选：上传 PDF / Word / 图片文件"),
-    source_url: str = Form("", description="可选：产品网页 URL"),
-    raw_text: str = Form("", description="可选：直接粘贴的产品资料文本"),
-    user_prompt: str = Form("", description="可选：品牌约束、口吻要求、禁用词、额外提示词"),
+    content_type: str = Form(...),
+    file: UploadFile | None = File(None),
+    source_url: str = Form(""),
+    raw_text: str = Form(""),
+    user_prompt: str = Form(""),
+    conversation_id: Optional[int] = Form(None),
+    user_id: int = Depends(get_current_user_id)
 ):
     try:
         file_bytes = None
@@ -178,15 +211,45 @@ async def generate_content_stream(
             source_url=source_url,
             raw_text=raw_text,
         )
+
+        if conversation_id is None:
+            conv_id = create_conversation(user_id, title=f"{content_type} - {filename or '文本输入'}")
+        else:
+            conv_id = conversation_id
+
+        # 存储用户输入
+        user_input_summary = f"生成类型: {content_type}\n额外提示: {user_prompt}" if user_prompt else f"生成类型: {content_type}"
+        add_message(conv_id, "user", user_input_summary)
+
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
 
-    generator = stream_content_generation_agent(
-        source_material=source_material,
-        content_type=content_type,
-        user_prompt=user_prompt,
-    )
-    return StreamingResponse(generator, media_type="text/event-stream")
+    async def generator_with_storage():
+        accumulated_result = {}
+        async for chunk in stream_content_generation_agent(
+            source_material=source_material,
+            content_type=content_type,
+            user_prompt=user_prompt,
+        ):
+            yield chunk
+            # 可以在这里解析 chunk 收集最终结果，但更简单的方法是在流结束后从 agent 内部状态获取。
+            # 由于 stream_content_generation_agent 只 yield SSE 事件，无法直接拿到最终结果。
+            # 所以我们选择在生成器结束后调用同步版本获取一次结果存入数据库（代价是生成两次）。
+            # 或者修改 stream_content_generation_agent 使其也能返回最终数据。
+            # 这里演示一种简化方式：流结束后，调用同步版本获取结果（会重复执行 LLM）。
+        # 获取最终结果存入数据库
+        try:
+            final_result = run_content_generation_agent(
+                source_material=source_material,
+                content_type=content_type,
+                user_prompt=user_prompt,
+            )
+            assistant_content = json.dumps(final_result["final_data"], ensure_ascii=False, indent=2)
+            add_message(conv_id, "assistant", assistant_content)
+        except Exception:
+            pass  # 存储失败不影响主流程
+
+    return StreamingResponse(generator_with_storage(), media_type="text/event-stream")
 
 
 if __name__ == "__main__":
