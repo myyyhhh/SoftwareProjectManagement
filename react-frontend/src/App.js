@@ -20,6 +20,7 @@ function App() {
   const [authMode, setAuthMode] = useState('login'); // 登录/注册模式
   const [username, setUsername] = useState(''); // 用户名
   const [password, setPassword] = useState(''); // 密码
+  const [userId, setUserId] = useState(null); // 用户ID
   const [history, setHistory] = useState([]); // 历史对话
   const [currentSessionId, setCurrentSessionId] = useState(Date.now()); // 当前会话ID
 
@@ -27,8 +28,9 @@ function App() {
   const FASTAPI_CONFIG = {
     baseUrl: 'http://localhost:8000', // 替换为实际的 FastAPI 服务地址
     generateEndpoint: '/generate_from_file', // 生成内容的接口路径
-    streamEndpoint: '/stream_generate', // 流式生成接口路径
+    streamEndpoint: '/generate_stream', // 流式生成接口路径
     authEndpoint: '/auth', // 认证接口路径
+    conversationsEndpoint: '/auth/conversations', // 历史对话接口路径
     headers: {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer ' + localStorage.getItem('token')
@@ -54,8 +56,22 @@ function App() {
     const token = localStorage.getItem('token');
     if (token) {
       setIsAuthenticated(true);
+      // 尝试从本地存储获取用户ID
+      const savedUserId = localStorage.getItem('userId');
+      if (savedUserId) {
+        setUserId(savedUserId);
+        // 获取历史对话
+        fetchConversations();
+      }
     }
   }, []);
+
+  // 登录状态变化时保存用户ID到本地存储
+  useEffect(() => {
+    if (userId) {
+      localStorage.setItem('userId', userId);
+    }
+  }, [userId]);
 
   // 处理文件上传
   const handleFileUpload = (e) => {
@@ -91,7 +107,8 @@ function App() {
       const requestData = {
         filename: fileName,
         content_type: type,
-        task_description: taskName
+        task_description: taskName,
+        conversation_id: currentSessionId
       };
 
       // 调用 FastAPI 接口
@@ -99,7 +116,10 @@ function App() {
         `${FASTAPI_CONFIG.baseUrl}${FASTAPI_CONFIG.generateEndpoint}`,
         {
           method: 'POST',
-          headers: FASTAPI_CONFIG.headers,
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + localStorage.getItem('token')
+          },
           body: JSON.stringify(requestData)
         }
       );
@@ -107,14 +127,14 @@ function App() {
       const result = await response.json();
 
       // 处理接口返回状态
-      if (result.status === 'success') {
+      if (result.title && result.content) {
         // 拼接完整内容（适配接口返回的 title + content）
         return {
           success: true,
           preview: `摘要：${result.content.substring(0, 100)}...`, // 截取前100字符作为预览
           fullContent: `标题：${result.title}\n\n正文：\n${result.content}`
         };
-      } else if (result.status === 'error') {
+      } else {
         return {
           success: false,
           errorMsg: result.message || '生成失败：服务器返回错误'
@@ -136,7 +156,8 @@ function App() {
       const requestData = {
         filename: fileName,
         content_type: type,
-        task_description: taskName
+        task_description: taskName,
+        conversation_id: currentSessionId
       };
 
       // 调用流式接口
@@ -144,7 +165,10 @@ function App() {
         `${FASTAPI_CONFIG.baseUrl}${FASTAPI_CONFIG.streamEndpoint}`,
         {
           method: 'POST',
-          headers: FASTAPI_CONFIG.headers,
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + localStorage.getItem('token')
+          },
           body: JSON.stringify(requestData)
         }
       );
@@ -231,12 +255,15 @@ function App() {
       );
 
       const result = await response.json();
-      if (result.status === 'success') {
+      if (result.token) {
         localStorage.setItem('token', result.token);
+        setUserId(result.user_id);
         setIsAuthenticated(true);
         setShowAuthModal(false);
         setUsername('');
         setPassword('');
+        // 登录成功后获取历史对话
+        await fetchConversations();
       } else {
         alert(result.message || '认证失败');
       }
@@ -245,8 +272,40 @@ function App() {
     }
   };
 
+  // 获取历史对话
+  const fetchConversations = async () => {
+    if (!isAuthenticated || !userId) return;
+    try {
+      const response = await fetch(
+        `${FASTAPI_CONFIG.baseUrl}${FASTAPI_CONFIG.conversationsEndpoint}/${userId}`,
+        {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + localStorage.getItem('token')
+          }
+        }
+      );
+
+      const result = await response.json();
+      if (result) {
+        // 转换后端返回的对话格式为前端格式
+        const formattedHistory = result.map(session => ({
+          id: session.id,
+          timestamp: session.created_at,
+          fileName: session.file_name || '无文件',
+          content_type: session.content_type,
+          messages: session.messages
+        }));
+        setHistory(formattedHistory);
+      }
+    } catch (error) {
+      console.error('获取历史对话失败：', error);
+    }
+  };
+
   // 保存对话到历史记录
-  const saveToHistory = () => {
+  const saveToHistory = async () => {
     if (messages.length > 1) { // 至少有一条用户消息和一条助手消息
       const session = {
         id: currentSessionId,
@@ -256,7 +315,8 @@ function App() {
         messages: [...messages]
       };
       setHistory(prev => [session, ...prev]);
-      // 保存到本地存储
+      // 如果已登录，后端会自动保存对话
+      // 保存到本地存储作为备份
       localStorage.setItem('chatHistory', JSON.stringify([session, ...history]));
     }
   };
@@ -325,7 +385,18 @@ function App() {
             <p className="text-xs text-gray-400 mt-2 uppercase tracking-widest">Brand Consistency Agent</p>
           </div>
           {/* 登录/注册按钮 */}
-          <button onClick={() => setShowAuthModal(true)} className="text-xs font-bold text-blue-600 hover:text-blue-800 transition-colors">
+          <button onClick={() => {
+            if (isAuthenticated) {
+              // 退出登录
+              localStorage.removeItem('token');
+              localStorage.removeItem('userId');
+              setIsAuthenticated(false);
+              setUserId(null);
+              setHistory([]);
+            } else {
+              setShowAuthModal(true);
+            }
+          }} className="text-xs font-bold text-blue-600 hover:text-blue-800 transition-colors">
             {isAuthenticated ? '退出' : '登录'}
           </button>
         </div>
